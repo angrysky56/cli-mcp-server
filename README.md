@@ -1,5 +1,5 @@
 # CLI MCP Server
-
+# Modified by angrysky56 to allow shell and operators to facilitate Claude's coding abilities.
 ---
 
 A secure Model Context Protocol (MCP) server implementation for executing controlled command-line operations with
