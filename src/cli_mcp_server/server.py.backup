@@ -37,35 +37,6 @@ class CommandTimeoutError(CommandError):
     pass
 
 
-def sanitize_output(output_text: str, max_length: int = 50000) -> str:
-    """
-    Sanitize command output by removing control characters and limiting size.
-    
-    Args:
-        output_text (str): The raw command output text
-        max_length (int): Maximum allowed length for the output
-        
-    Returns:
-        str: Sanitized text with control characters removed and size limited
-    """
-    if not output_text:
-        return ""
-        
-    # Remove ANSI escape sequences (colors, cursor movement, etc.)
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    clean_text = ansi_escape.sub('', output_text)
-    
-    # Remove other control characters except newlines and tabs
-    clean_text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', clean_text)
-    
-    # Limit output size if needed
-    if len(clean_text) > max_length:
-        truncated_length = max_length - 40  # Leave room for truncation message
-        clean_text = clean_text[:truncated_length] + "\n\n[Output truncated - exceeded maximum length]"
-    
-    return clean_text
-
-
 @dataclass
 class SecurityConfig:
     """
@@ -319,14 +290,9 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
 
             response = []
             if result.stdout:
-                # Sanitize the stdout before adding to response
-                sanitized_stdout = sanitize_output(result.stdout)
-                response.append(types.TextContent(type="text", text=sanitized_stdout))
-                
+                response.append(types.TextContent(type="text", text=result.stdout))
             if result.stderr:
-                # Sanitize the stderr before adding to response
-                sanitized_stderr = sanitize_output(result.stderr)
-                response.append(types.TextContent(type="text", text=sanitized_stderr, error=True))
+                response.append(types.TextContent(type="text", text=result.stderr, error=True))
 
             response.append(
                 types.TextContent(

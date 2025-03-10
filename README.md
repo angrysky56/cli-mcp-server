@@ -1,5 +1,36 @@
 # CLI MCP Server
 # Modified by angrysky56 to allow shell and operators to facilitate Claude's coding abilities.
+
+Summary of the changes:
+
+Added Output Sanitization Function:
+
+Created a new sanitize_output() function that:
+
+Removes ANSI escape sequences (colors, cursor movements, etc.)
+Filters out control characters that could disrupt the interface
+Limits the output size to prevent buffer overflows
+Adds a clear message when output is truncated
+
+
+
+
+Modified Command Response Handling:
+
+Updated the handle_call_tool() function to sanitize stdout and stderr before sending to Claude Desktop
+Applied sanitization to both standard output and error streams
+
+
+Preserved Shell Operator Functionality:
+
+Kept the shell=True flag to maintain support for &&, |, and other shell operators
+Ensured all command chaining capabilities remain intact
+
+
+Added Proper Documentation:
+
+Included detailed docstrings for the new function
+Explained the purpose of the sanitization
 ---
 
 A secure Model Context Protocol (MCP) server implementation for executing controlled command-line operations with
