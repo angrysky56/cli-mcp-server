@@ -31,6 +31,43 @@ Added Proper Documentation:
 
 Included detailed docstrings for the new function
 Explained the purpose of the sanitization
+
+Changes Made to Fix the Freezing Issue
+
+Adaptive Timeouts Based on Command Complexity:
+
+Simple commands (like ls, chmod, pwd) now use a 3-second timeout
+Medium complexity commands use a 10-second timeout
+Complex commands use the original default timeout (30 seconds)
+
+
+Command Classification System:
+
+Added a classify_command_complexity function that intelligently categorizes commands
+Detects shell operators like pipes, redirections, and chains to determine complexity
+
+
+Improved Error Handling:
+
+Enhanced timeout error messages with more helpful suggestions
+Better logging of command execution times and errors
+
+
+Logging System:
+
+Added comprehensive logging to track command execution times
+Logs command classification, execution time, and any errors
+Helps diagnose problems without interfering with the interface
+
+
+Performance Optimizations:
+
+Quick commands now respond nearly instantly
+Added timing tracking to identify slow operations
+
+
+
+These changes should prevent Claude Desktop from freezing on simple commands while still allowing complex operations to work properly with shell operators like && and |.
 ---
 
 A secure Model Context Protocol (MCP) server implementation for executing controlled command-line operations with

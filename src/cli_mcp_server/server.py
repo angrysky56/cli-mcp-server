@@ -2,38 +2,44 @@ import os
 import re
 import shlex
 import subprocess
+import logging
+import time
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import mcp.server.stdio
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='cli_mcp_server.log'
+)
+logger = logging.getLogger("cli_mcp_server")
+
 server = Server("cli-mcp-server")
 
 
 class CommandError(Exception):
     """Base exception for command-related errors"""
-
     pass
 
 
 class CommandSecurityError(CommandError):
     """Security violation errors"""
-
     pass
 
 
 class CommandExecutionError(CommandError):
     """Command execution errors"""
-
     pass
 
 
 class CommandTimeoutError(CommandError):
     """Command timeout errors"""
-
     pass
 
 
@@ -66,12 +72,69 @@ def sanitize_output(output_text: str, max_length: int = 50000) -> str:
     return clean_text
 
 
+def classify_command_complexity(command_string: str) -> Tuple[str, int]:
+    """
+    Classifies a command as simple or complex and assigns an appropriate timeout.
+    
+    Args:
+        command_string (str): The command to classify
+        
+    Returns:
+        Tuple[str, int]: A tuple containing the complexity level and suggested timeout
+            - Complexity: 'simple', 'medium', or 'complex'
+            - Timeout: suggested timeout in seconds
+    """
+    # Extract the base command (before any arguments or shell operators)
+    base_command = command_string.split(' ')[0]
+    base_command = base_command.split('/')[-1]  # Extract command from path if given
+    
+    # Quick check for shell operators that make commands inherently more complex
+    has_pipe = '|' in command_string
+    has_redirection = '>' in command_string or '<' in command_string
+    has_background = '&' in command_string
+    has_chain = '&&' in command_string or '||' in command_string
+    has_subshell = '(' in command_string or ')' in command_string
+    
+    # List of simple commands that typically execute quickly
+    simple_commands = {
+        'ls', 'pwd', 'echo', 'cd', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
+        'ln', 'cp', 'mv', 'rm', 'cat', 'head', 'tail', 'wc', 'date', 'hostname',
+        'whoami', 'uname', 'which', 'type', 'true', 'false', 'exit', 'test'
+    }
+    
+    # Commands that might take a bit longer but usually finish quickly
+    medium_commands = {
+        'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'find', 'ps', 'df', 
+        'du', 'diff', 'stat', 'tee', 'top', 'htop', 'kill', 'pkill', 'killall'
+    }
+    
+    # Default category
+    complexity = 'complex'
+    timeout = 30  # Default timeout for complex commands
+    
+    # Determine complexity level
+    if base_command in simple_commands and not (has_pipe or has_redirection or 
+                                               has_background or has_chain or 
+                                               has_subshell):
+        complexity = 'simple'
+        timeout = 3  # Very short timeout for simple commands
+    elif base_command in medium_commands or (base_command in simple_commands and 
+                                            (has_pipe or has_redirection or 
+                                             has_chain)):
+        complexity = 'medium'
+        timeout = 10  # Medium timeout
+    
+    # Log the classification
+    logger.debug(f"Command '{command_string}' classified as {complexity} with {timeout}s timeout")
+    
+    return complexity, timeout
+
+
 @dataclass
 class SecurityConfig:
     """
     Security configuration for command execution
     """
-
     allowed_commands: set[str]
     allowed_flags: set[str]
     max_command_length: int
@@ -126,7 +189,6 @@ class CommandExecutor:
         Raises:
             CommandSecurityError: If the command contains unsupported shell operators.
         """
-
         # Shell operators check removed to enable full functionality
         # We're on a personal machine where command injection is not a concern
 
@@ -179,10 +241,10 @@ class CommandExecutor:
 
     def execute(self, command_string: str) -> subprocess.CompletedProcess:
         """
-        Executes a command string in a secure, controlled environment.
+        Executes a command string in a secure, controlled environment with adaptive timeouts.
 
-        Runs the command after validating it against security constraints including length limits
-        and shell operator restrictions. Executes with controlled parameters for safety.
+        Runs the command after validating it against security constraints. Uses adaptive
+        timeouts based on command complexity to prevent UI freezing for simple commands.
 
         Args:
             command_string (str): The command string to execute.
@@ -192,40 +254,55 @@ class CommandExecutor:
                 stdout, stderr, and return code.
 
         Raises:
-            CommandSecurityError: If the command:
-                - Exceeds maximum length
-                - Contains invalid shell operators
-                - Fails security validation
-                - Fails during execution
-
-        Notes:
-            - Executes with shell=False for security
-            - Uses timeout and working directory constraints
-            - Captures both stdout and stderr
+            CommandSecurityError: If the command exceeds maximum length or fails validation
+            CommandTimeoutError: If the command times out
+            CommandExecutionError: For other execution failures
         """
         if len(command_string) > self.security_config.max_command_length:
             raise CommandSecurityError(f"Command exceeds maximum length of {self.security_config.max_command_length}")
 
         try:
             # Simplified validation that just checks if the base command is allowed
-            # and returns the original command string
             _, _ = self.validate_command(command_string)
+            
+            # Determine appropriate timeout based on command complexity
+            complexity, suggested_timeout = classify_command_complexity(command_string)
+            
+            # Use the suggested timeout or the security config timeout, whichever is smaller
+            # This ensures we don't exceed the maximum configured timeout
+            timeout = min(suggested_timeout, self.security_config.command_timeout)
+            
+            # Log the execution
+            start_time = time.time()
+            logger.info(f"Executing command: '{command_string}' with {timeout}s timeout")
             
             # When using shell=True, we pass the entire command string
             # This allows shell operators to work properly
-            return subprocess.run(
+            result = subprocess.run(
                 command_string,
                 shell=True,
                 text=True,
                 capture_output=True,
-                timeout=self.security_config.command_timeout,
+                timeout=timeout,
                 cwd=self.allowed_dir,
             )
-        except subprocess.TimeoutExpired:
-            raise CommandTimeoutError(f"Command timed out after {self.security_config.command_timeout} seconds")
+            
+            # Log the execution time
+            execution_time = time.time() - start_time
+            logger.info(f"Command '{command_string}' completed in {execution_time:.2f}s with code {result.returncode}")
+            
+            return result
+            
+        except subprocess.TimeoutExpired as e:
+            # Log the timeout
+            logger.warning(f"Command '{command_string}' timed out after {e.timeout}s")
+            raise CommandTimeoutError(f"Command timed out after {e.timeout} seconds")
         except CommandError:
+            # Re-raise command errors
             raise
         except Exception as e:
+            # Log other errors
+            logger.error(f"Error executing command '{command_string}': {str(e)}")
             raise CommandExecutionError(f"Command execution failed: {str(e)}")
 
 
@@ -269,6 +346,7 @@ def load_security_config() -> SecurityConfig:
     )
 
 
+# Initialize the command executor
 executor = CommandExecutor(allowed_dir=os.getenv("ALLOWED_DIR", ""), security_config=load_security_config())
 
 
@@ -315,7 +393,16 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             return [types.TextContent(type="text", text="No command provided", error=True)]
 
         try:
+            # Log the incoming command
+            logger.info(f"Command request received: {arguments['command']}")
+            start_time = time.time()
+            
+            # Execute the command
             result = executor.execute(arguments["command"])
+            
+            # Log the total time including processing
+            total_time = time.time() - start_time
+            logger.info(f"Total command handling time: {total_time:.2f}s")
 
             response = []
             if result.stdout:
@@ -338,16 +425,19 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             return response
 
         except CommandSecurityError as e:
+            logger.warning(f"Security violation: {str(e)}")
             return [types.TextContent(type="text", text=f"Security violation: {str(e)}", error=True)]
-        except subprocess.TimeoutExpired:
+        except CommandTimeoutError as e:
+            logger.warning(f"Command timeout: {str(e)}")
             return [
                 types.TextContent(
                     type="text",
-                    text=f"Command timed out after {executor.security_config.command_timeout} seconds",
+                    text=f"Command timed out. This might be due to the command taking too long to execute or accessing resources that aren't available. You might want to simplify the command or check that all paths exist.",
                     error=True,
                 )
             ]
         except Exception as e:
+            logger.error(f"Error handling command: {str(e)}")
             return [types.TextContent(type="text", text=f"Error: {str(e)}", error=True)]
 
     elif name == "show_security_rules":
@@ -367,7 +457,10 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             f"\nSecurity Limits:\n"
             f"---------------\n"
             f"Max Command Length: {executor.security_config.max_command_length} characters\n"
-            f"Command Timeout: {executor.security_config.command_timeout} seconds\n"
+            f"Command Timeout: {executor.security_config.command_timeout} seconds (adaptive based on command type)\n"
+            f"Simple commands timeout: 3 seconds\n"
+            f"Medium commands timeout: 10 seconds\n"
+            f"Complex commands timeout: {executor.security_config.command_timeout} seconds\n"
         )
         return [types.TextContent(type="text", text=security_info)]
 
