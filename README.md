@@ -69,9 +69,9 @@ Added timing tracking to identify slow operations
 
 These changes should prevent Claude Desktop from freezing on simple commands while still allowing complex operations to work properly with shell operators like && and |.
 
-## Improved Error Handling and Resilience in v0.2.2/v0.2.3
+## Improved Error Handling and Resilience in v0.2.2-v0.2.4
 
-Version 0.2.2 fixed the issue where the server would freeze when handling error responses, with a complete overhaul of the error handling system. Version 0.2.3 adds log rotation and optimized logging to prevent excessive log file growth.
+Version 0.2.2 fixed the issue where the server would freeze when handling error responses, with a complete overhaul of the error handling system. Version 0.2.3 added log rotation, and version 0.2.4 dramatically reduces log volume by filtering MCP framework logs.
 
 Key improvements:
 
@@ -80,8 +80,9 @@ Key improvements:
 - **Failsafe Response Construction**: Every response path now has multiple layers of validation to ensure at least one valid text item is returned
 - **Improved Sanitization**: Enhanced output sanitization to handle a wider variety of edge cases
 - **Robust Command Execution**: Better handling of command timeouts and execution failures
-- **Optimized Logging System**: Logs are now rotated (max 2MB per file, 5 backup files) to prevent excessive disk usage
-- **Configurable Log Levels**: Set verbosity with the LOG_LEVEL environment variable (defaults to WARNING for minimal logging)
+- **Optimized Logging System**: Logs are now rotated (max 1MB per file, 3 backup files) to prevent excessive disk usage
+- **Framework Log Filtering**: MCP framework logs are filtered to CRITICAL level only to dramatically reduce log volume
+- **Configurable Log Levels**: Set verbosity with the LOG_LEVEL environment variable (defaults to ERROR for minimal logging)
 
 These changes make the CLI MCP Server significantly more reliable, preventing freezing even when commands fail in unusual ways, while also ensuring disk space is managed efficiently with log rotation.
 ---
@@ -146,7 +147,7 @@ Configure the server using environment variables:
 | `ALLOWED_FLAGS`     | Comma-separated list of allowed flags or 'all'       | `-l,-a,--help`    |
 | `MAX_COMMAND_LENGTH`| Maximum command string length                        | `1024`            |
 | `COMMAND_TIMEOUT`   | Command execution timeout (seconds)                  | `30`              |
-| `LOG_LEVEL`         | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)| `WARNING`         |
+| `LOG_LEVEL`         | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)| `ERROR`           |
 
 Note: Setting `ALLOWED_COMMANDS` or `ALLOWED_FLAGS` to 'all' will allow any command or flag respectively.
 

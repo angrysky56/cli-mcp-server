@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.4 - 2025-03-17
+
+### Fixed
+- Dramatically reduced logging by filtering MCP framework logs
+- Fixed excessive log growth issue with custom filter
+
+### Changed
+- Reduced log file size to 1MB and backup count to 3
+- Default log level changed to ERROR to minimize log volume
+- Added custom MpcFilter to block non-critical MCP framework logs
+- Updated security information display with new log filter details
+
 ## v0.2.3 - 2025-03-17
 
 ### Fixed
