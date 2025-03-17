@@ -1,23 +1,45 @@
 # Changelog
 
+## v0.2.3 - 2025-03-17
+
+### Fixed
+- Implemented log rotation to prevent excessive log file growth
+
+### Added
+- Optimized logging system with rotation and configurable log levels
+- Log directory at ~/.cli-mcp-server/logs with 2MB file size limit
+- LOG_LEVEL environment variable for configuring verbosity
+
+### Changed
+- Optimized logging to reduce verbosity for common operations
+- Truncated long command strings in log messages
+- Default log level changed to WARNING to reduce log volume
+- Updated security information display to include logging configuration
+
 ## v0.2.2 - 2025-03-17
 
 ### Fixed
 - Fixed issue where the server would freeze when receiving error responses
 - Enhanced error handling to ensure valid responses in all cases
 - Improved sanitization of command output to handle edge cases
+- Implemented log rotation to prevent excessive log file growth
 
 ### Added
 - Extended error objects that include detailed error information
 - Failsafe response construction for all command paths
-- More comprehensive logging for better diagnostics
+- Optimized logging system with rotation and configurable log levels
+- Log directory at ~/.cli-mcp-server/logs with 2MB file size limit
+- LOG_LEVEL environment variable for configuring verbosity
 - Test script for validating error handling
 - Developer documentation for extending the server
 
 ### Changed
 - Enhanced exception handling in the handle_call_tool function
 - Improved command execution with better error reporting
-- Updated security information display to include error handling features
+- Optimized logging to reduce verbosity for common operations
+- Truncated long command strings in log messages
+- Updated security information display to include logging configuration
+- Default log level changed to WARNING to reduce log volume
 
 ## v0.2.1 - 2024-03-10
 
