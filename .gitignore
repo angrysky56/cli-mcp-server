@@ -11,3 +11,6 @@ wheels/
 
 # PyCharm
 .idea/
+
+# logs
+cli_mcp_server.log
