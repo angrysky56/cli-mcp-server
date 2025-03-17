@@ -68,6 +68,20 @@ Added timing tracking to identify slow operations
 
 
 These changes should prevent Claude Desktop from freezing on simple commands while still allowing complex operations to work properly with shell operators like && and |.
+
+## Improved Error Handling and Resilience in v0.2.2
+
+The latest update (v0.2.2) fixes the issue where the server would freeze when handling error responses. This version includes a complete overhaul of the error handling system to ensure that Claude always receives a valid, properly formatted response regardless of what happens during command execution.
+
+Key improvements:
+
+- **Never Freezes on Errors**: The server now handles all error conditions gracefully, never returning null responses that could cause the interface to freeze
+- **Extended Exception System**: Added error result objects to exceptions that provide structured error data
+- **Failsafe Response Construction**: Every response path now has multiple layers of validation to ensure at least one valid text item is returned
+- **Improved Sanitization**: Enhanced output sanitization to handle a wider variety of edge cases
+- **Robust Command Execution**: Better handling of command timeouts and execution failures
+
+These changes make the CLI MCP Server significantly more reliable, preventing freezing even when commands fail in unusual ways.
 ---
 
 A secure Model Context Protocol (MCP) server implementation for executing controlled command-line operations with

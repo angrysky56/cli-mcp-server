@@ -1,6 +1,6 @@
 [project]
 name = "cli-mcp-server"
-version = "0.2.1"
+version = "0.2.2"
 description = "Command line interface for MCP clients with secure execution and customizable security policies"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -24,28 +24,46 @@ server = Server("cli-mcp-server")
 
 
 class CommandError(Exception):
-    """Base exception for command-related errors"""
+    """Base exception for command-related errors
+    
+    Can optionally include a result object to provide more context about the error
+    """
     pass
 
 
 class CommandSecurityError(CommandError):
-    """Security violation errors"""
+    """Security violation errors
+    
+    Raised when a command violates security constraints such as:
+    - Command is not in the allowlist
+    - Command contains disallowed flags
+    - Command exceeds maximum length
+    """
     pass
 
 
 class CommandExecutionError(CommandError):
-    """Command execution errors"""
+    """Command execution errors
+    
+    Raised when a command fails during execution. Can include a CompletedProcess
+    object with error details in the second argument.
+    """
     pass
 
 
 class CommandTimeoutError(CommandError):
-    """Command timeout errors"""
+    """Command timeout errors
+    
+    Raised when a command exceeds its timeout limit. Can include a CompletedProcess
+    object with error details in the second argument.
+    """
     pass
 
 
 def sanitize_output(output_text: str, max_length: int = 50000) -> str:
     """
     Sanitize command output by removing control characters and limiting size.
+    Handles None values gracefully and provides robust error handling.
     
     Args:
         output_text (str): The raw command output text
@@ -54,22 +72,41 @@ def sanitize_output(output_text: str, max_length: int = 50000) -> str:
     Returns:
         str: Sanitized text with control characters removed and size limited
     """
-    if not output_text:
+    # Handle None or non-string inputs safely
+    if output_text is None:
         return ""
         
-    # Remove ANSI escape sequences (colors, cursor movement, etc.)
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    clean_text = ansi_escape.sub('', output_text)
+    # Ensure we're working with strings
+    if not isinstance(output_text, str):
+        try:
+            output_text = str(output_text)
+        except Exception as e:
+            logger.error(f"Error converting output to string: {e}")
+            return "[Error: Could not convert command output to string]"
     
-    # Remove other control characters except newlines and tabs
-    clean_text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', clean_text)
+    # Handle empty strings early
+    if not output_text.strip():
+        return ""
     
-    # Limit output size if needed
-    if len(clean_text) > max_length:
-        truncated_length = max_length - 40  # Leave room for truncation message
-        clean_text = clean_text[:truncated_length] + "\n\n[Output truncated - exceeded maximum length]"
-    
-    return clean_text
+    try:    
+        # Remove ANSI escape sequences (colors, cursor movement, etc.)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        clean_text = ansi_escape.sub('', output_text)
+        
+        # Remove other control characters except newlines and tabs
+        clean_text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', clean_text)
+        
+        # Limit output size if needed
+        if len(clean_text) > max_length:
+            truncated_length = max_length - 100  # Leave room for truncation message
+            clean_text = clean_text[:truncated_length] + "\n\n[Output truncated - exceeded maximum length of " + str(max_length) + " characters]"
+        
+        return clean_text
+    except Exception as e:
+        # Log the error and return a safe message
+        logger.error(f"Error sanitizing output: {e}", exc_info=True)
+        return "[Error sanitizing command output]"
+
 
 
 def classify_command_complexity(command_string: str) -> Tuple[str, int]:
@@ -258,6 +295,9 @@ class CommandExecutor:
             CommandTimeoutError: If the command times out
             CommandExecutionError: For other execution failures
         """
+        if not command_string or not command_string.strip():
+            raise CommandSecurityError("Empty command")
+            
         if len(command_string) > self.security_config.max_command_length:
             raise CommandSecurityError(f"Command exceeds maximum length of {self.security_config.max_command_length}")
 
@@ -276,34 +316,58 @@ class CommandExecutor:
             start_time = time.time()
             logger.info(f"Executing command: '{command_string}' with {timeout}s timeout")
             
-            # When using shell=True, we pass the entire command string
-            # This allows shell operators to work properly
-            result = subprocess.run(
-                command_string,
-                shell=True,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                cwd=self.allowed_dir,
-            )
-            
-            # Log the execution time
-            execution_time = time.time() - start_time
-            logger.info(f"Command '{command_string}' completed in {execution_time:.2f}s with code {result.returncode}")
-            
-            return result
-            
-        except subprocess.TimeoutExpired as e:
-            # Log the timeout
-            logger.warning(f"Command '{command_string}' timed out after {e.timeout}s")
-            raise CommandTimeoutError(f"Command timed out after {e.timeout} seconds")
+            try:
+                # When using shell=True, we pass the entire command string
+                # This allows shell operators to work properly
+                result = subprocess.run(
+                    command_string,
+                    shell=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    cwd=self.allowed_dir,
+                )
+                
+                # Ensure stdout and stderr are strings, not None
+                if result.stdout is None:
+                    result.stdout = ""
+                if result.stderr is None:
+                    result.stderr = ""
+                    
+                # Log the execution time
+                execution_time = time.time() - start_time
+                logger.info(f"Command '{command_string}' completed in {execution_time:.2f}s with code {result.returncode}")
+                
+                return result
+            except subprocess.TimeoutExpired as e:
+                # Log the timeout
+                logger.warning(f"Command '{command_string}' timed out after {e.timeout}s")
+                # Create a CompletedProcess with error information to prevent null returns
+                error_result = subprocess.CompletedProcess(
+                    args=command_string,
+                    returncode=124,  # Common timeout exit code
+                    stdout="",
+                    stderr=f"Command timed out after {e.timeout} seconds"
+                )
+                raise CommandTimeoutError(f"Command timed out after {e.timeout} seconds", error_result)
+                
+        except CommandTimeoutError:
+            # Re-raise timeout errors with the error result
+            raise
         except CommandError:
             # Re-raise command errors
             raise
         except Exception as e:
             # Log other errors
-            logger.error(f"Error executing command '{command_string}': {str(e)}")
-            raise CommandExecutionError(f"Command execution failed: {str(e)}")
+            logger.error(f"Error executing command '{command_string}': {str(e)}", exc_info=True)
+            # Create a CompletedProcess with error information to prevent null returns
+            error_result = subprocess.CompletedProcess(
+                args=command_string,
+                returncode=1,  # Generic error code
+                stdout="",
+                stderr=f"Error executing command: {str(e)}"
+            )
+            raise CommandExecutionError(f"Command execution failed: {str(e)}", error_result)
 
 
 # Load security configuration from environment
@@ -394,27 +458,31 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
 
         try:
             # Log the incoming command
-            logger.info(f"Command request received: {arguments['command']}")
+            command = arguments['command']
+            logger.info(f"Command request received: {command}")
             start_time = time.time()
             
             # Execute the command
-            result = executor.execute(arguments["command"])
+            result = executor.execute(command)
             
             # Log the total time including processing
             total_time = time.time() - start_time
             logger.info(f"Total command handling time: {total_time:.2f}s")
 
+            # Always have at least one response item
             response = []
-            if result.stdout:
-                # Sanitize the stdout before adding to response
-                sanitized_stdout = sanitize_output(result.stdout)
+            
+            # Handle stdout (even if empty)
+            sanitized_stdout = sanitize_output(result.stdout) if result.stdout else ""
+            if sanitized_stdout:
                 response.append(types.TextContent(type="text", text=sanitized_stdout))
                 
-            if result.stderr:
-                # Sanitize the stderr before adding to response
-                sanitized_stderr = sanitize_output(result.stderr)
+            # Handle stderr (even if empty)
+            sanitized_stderr = sanitize_output(result.stderr) if result.stderr else ""
+            if sanitized_stderr:
                 response.append(types.TextContent(type="text", text=sanitized_stderr, error=True))
 
+            # Always include the return code
             response.append(
                 types.TextContent(
                     type="text",
@@ -422,6 +490,10 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
                 )
             )
 
+            # Ensure we never return an empty response list
+            if not response:
+                response.append(types.TextContent(type="text", text="Command executed but produced no output"))
+                
             return response
 
         except CommandSecurityError as e:
@@ -429,16 +501,44 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             return [types.TextContent(type="text", text=f"Security violation: {str(e)}", error=True)]
         except CommandTimeoutError as e:
             logger.warning(f"Command timeout: {str(e)}")
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"Command timed out. This might be due to the command taking too long to execute or accessing resources that aren't available. You might want to simplify the command or check that all paths exist.",
-                    error=True,
-                )
-            ]
+            # Check if we have an error_result object attached to the exception
+            error_result = getattr(e, 'args', [None])[1] if len(getattr(e, 'args', [])) > 1 else None
+            
+            response = []
+            if error_result and hasattr(error_result, 'stderr') and error_result.stderr:
+                response.append(types.TextContent(type="text", text=sanitize_output(error_result.stderr), error=True))
+            
+            # Always include the timeout message
+            response.append(types.TextContent(
+                type="text",
+                text=f"Command timed out. This might be due to the command taking too long to execute or accessing resources that aren't available. You might want to simplify the command or check that all paths exist.",
+                error=True
+            ))
+            
+            return response
+        except CommandExecutionError as e:
+            logger.error(f"Command execution error: {str(e)}", exc_info=True)
+            
+            # Check if we have an error_result object attached to the exception
+            error_result = getattr(e, 'args', [None])[1] if len(getattr(e, 'args', [])) > 1 else None
+            
+            response = []
+            if error_result and hasattr(error_result, 'stderr') and error_result.stderr:
+                response.append(types.TextContent(type="text", text=sanitize_output(error_result.stderr), error=True))
+                
+            # Always include the execution error message
+            response.append(types.TextContent(
+                type="text",
+                text=f"Error executing command: {str(e)}",
+                error=True
+            ))
+            
+            return response
         except Exception as e:
-            logger.error(f"Error handling command: {str(e)}")
-            return [types.TextContent(type="text", text=f"Error: {str(e)}", error=True)]
+            # Log the full exception details for unknown exceptions
+            logger.error(f"Unexpected error handling command: {str(e)}", exc_info=True)
+            # Provide a clear error message back to the user
+            return [types.TextContent(type="text", text=f"Unexpected error: {str(e)}", error=True)]
 
     elif name == "show_security_rules":
         commands_desc = "All commands allowed" if executor.security_config.allow_all_commands else ", ".join(sorted(executor.security_config.allowed_commands))
@@ -461,6 +561,12 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             f"Simple commands timeout: 3 seconds\n"
             f"Medium commands timeout: 10 seconds\n"
             f"Complex commands timeout: {executor.security_config.command_timeout} seconds\n"
+            f"\nError Handling Features (v0.2.2):\n"
+            f"---------------------------\n"
+            f"- Enhanced error handling to prevent UI freezing\n"
+            f"- Robust output sanitization for all command results\n"
+            f"- Graceful handling of timeouts and execution failures\n"
+            f"- Detailed logging for better troubleshooting\n"
         )
         return [types.TextContent(type="text", text=security_info)]
 
@@ -474,7 +580,7 @@ async def main():
             write_stream,
             InitializationOptions(
                 server_name="cli-mcp-server",
-                server_version="0.2.1",
+                server_version="0.2.2",
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},
