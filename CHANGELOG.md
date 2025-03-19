@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.5 - 2025-03-19
+
+### Fixed
+- Addressed stability issues with `ls` and `grep` commands that could cause freezes
+- Improved detection and handling of extremely large command outputs
+- Enhanced error handling for failed commands, especially for non-existent files
+- Fixed binary data handling to prevent display issues
+
+### Added
+- Special handling for recursive `ls` and `grep` commands with adjusted timeouts
+- User-friendly error messages for common issues like "No such file or directory"
+- Progressive output buffering for large responses
+- Improved classification of commands that use pipes and filters
+
+### Changed
+- Moved `ls` and several file operation commands from simple to medium complexity category
+- Enhanced output sanitization for better performance with large outputs
+- Added aggressive truncation for extremely large outputs
+- Improved detection and handling of binary data
+
 ## v0.2.4 - 2025-03-17
 
 ### Fixed

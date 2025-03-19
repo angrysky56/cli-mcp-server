@@ -131,6 +131,17 @@ def sanitize_output(output_text: str, max_length: int = 50000) -> str:
         return ""
     
     try:    
+        # Check for extremely large outputs early - improve performance
+        if len(output_text) > max_length * 2:
+            logger.warning(f"Extremely large output detected ({len(output_text)} chars), performing aggressive truncation")
+            truncated_length = max_length // 2  # Aggressively truncate extremely large outputs
+            return output_text[:truncated_length] + "\n\n[Output extremely large - aggressively truncated to " + str(truncated_length) + " characters]"
+            
+        # Detect and handle binary data which could cause display issues
+        if '\x00' in output_text[:1024]:  # Check first 1KB for null bytes
+            binary_sample = output_text[:100].replace('\x00', '␀')
+            return f"[Binary data detected - output suppressed]\nFirst 100 bytes: {binary_sample}..."
+        
         # Remove ANSI escape sequences (colors, cursor movement, etc.)
         ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         clean_text = ansi_escape.sub('', output_text)
@@ -176,20 +187,42 @@ def classify_command_complexity(command_string: str) -> Tuple[str, int]:
     
     # List of simple commands that typically execute quickly
     simple_commands = {
-        'ls', 'pwd', 'echo', 'cd', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
-        'ln', 'cp', 'mv', 'rm', 'cat', 'head', 'tail', 'wc', 'date', 'hostname',
+        'pwd', 'echo', 'cd', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
+        'ln', 'mv', 'wc', 'date', 'hostname',
         'whoami', 'uname', 'which', 'type', 'true', 'false', 'exit', 'test'
     }
     
     # Commands that might take a bit longer but usually finish quickly
     medium_commands = {
-        'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'find', 'ps', 'df', 
-        'du', 'diff', 'stat', 'tee', 'top', 'htop', 'kill', 'pkill', 'killall'
+        'ls', 'grep', 'awk', 'sed', 'cut', 'sort', 'uniq', 'tr', 'find', 'ps', 'df', 
+        'du', 'diff', 'stat', 'tee', 'top', 'htop', 'kill', 'pkill', 'killall', 'cp', 'rm', 'cat', 'head', 'tail'
     }
     
     # Default category
     complexity = 'complex'
     timeout = 30  # Default timeout for complex commands
+    
+    # Special handling for problematic commands
+    if base_command == 'ls' and ('-R' in command_string or '--recursive' in command_string):
+        # Recursive ls can be very slow and produce massive output
+        complexity = 'complex'
+        timeout = max(15, timeout)  # Ensure at least 15 seconds for recursive ls
+        logger.debug(f"Special handling for recursive ls command with {timeout}s timeout")
+        
+    elif base_command == 'grep' and ('-r' in command_string or '-R' in command_string or '--recursive' in command_string):
+        # Recursive grep can be very slow and produce massive output
+        complexity = 'complex'
+        timeout = max(20, timeout)  # Ensure at least 20 seconds for recursive grep
+        logger.debug(f"Special handling for recursive grep command with {timeout}s timeout")
+        
+    # Check for pipe to commands that might increase output size dramatically
+    if has_pipe and ('| grep' in command_string or '|grep' in command_string or 
+                     '| sort' in command_string or '|sort' in command_string or
+                     '| uniq' in command_string or '|uniq' in command_string):
+        # Commands that filter/transform output can be unpredictable
+        complexity = 'complex'
+        timeout = max(15, timeout)
+        logger.debug(f"Special handling for piped command with {timeout}s timeout")
     
     # Determine complexity level
     if base_command in simple_commands and not (has_pipe or has_redirection or 
@@ -373,6 +406,34 @@ class CommandExecutor:
                     timeout=timeout,
                     cwd=self.allowed_dir,
                 )
+                
+                # Check if this is a command likely to produce large output
+                is_large_output_likely = (
+                    'ls -la' in command_string or 
+                    'ls -l' in command_string or
+                    'grep ' in command_string or
+                    'find ' in command_string
+                )
+                
+                # For likely large output commands, set a lower buffer threshold
+                max_buffer_size = 1024 * 512  # 512KB for potentially large outputs
+                if is_large_output_likely and (
+                    len(result.stdout or '') > max_buffer_size or 
+                    len(result.stderr or '') > max_buffer_size
+                ):
+                    logger.warning(
+                        f"Large output detected for command '{command_string[:50]}...' "
+                        f"(stdout: {len(result.stdout or '')} bytes, stderr: {len(result.stderr or '')} bytes)"
+                    )
+                    
+                    # For extremely large outputs, truncate early to prevent processing delays
+                    if result.stdout and len(result.stdout) > max_buffer_size * 2:
+                        logger.warning(f"Extremely large stdout detected, truncating to {max_buffer_size} bytes")
+                        result.stdout = result.stdout[:max_buffer_size] + "\n\n[Output truncated - exceeded maximum buffer size]"
+                    
+                    if result.stderr and len(result.stderr) > max_buffer_size * 2:
+                        logger.warning(f"Extremely large stderr detected, truncating to {max_buffer_size} bytes")
+                        result.stderr = result.stderr[:max_buffer_size] + "\n\n[Output truncated - exceeded maximum buffer size]"
                 
                 # Ensure stdout and stderr are strings, not None
                 if result.stdout is None:
@@ -584,7 +645,25 @@ async def handle_call_tool(name: str, arguments: Optional[Dict[str, Any]]) -> Li
             
             response = []
             if error_result and hasattr(error_result, 'stderr') and error_result.stderr:
-                response.append(types.TextContent(type="text", text=sanitize_output(error_result.stderr), error=True))
+                stderr_output = sanitize_output(error_result.stderr)
+                response.append(types.TextContent(type="text", text=stderr_output, error=True))
+                
+                # Detect common error patterns
+                if "No such file or directory" in stderr_output:
+                    # Extract the filename from the error message if possible
+                    file_match = re.search(r"(['\"])(.+?)\1: No such file or directory", stderr_output)
+                    filename = file_match.group(2) if file_match else "The specified file"
+                    response.append(types.TextContent(
+                        type="text",
+                        text=f"Error: {filename} does not exist. Please check the path and try again.",
+                        error=True
+                    ))
+                elif "Permission denied" in stderr_output:
+                    response.append(types.TextContent(
+                        type="text",
+                        text="Error: You don't have permission to access this file or directory.",
+                        error=True
+                    ))
                 
             # Always include the execution error message
             response.append(types.TextContent(
